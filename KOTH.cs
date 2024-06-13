@@ -12,7 +12,7 @@ namespace Oxide.Plugins
     [Description("KOTH event plugin for Rust with GUI scoreboard, admin commands, a locked crate for the winner, and points for kills")]
     public class KOTH : RustPlugin
     {
-        private const string EventZoneName = "KOTHZone";
+        private const string EventZoneName = "KOTH Zone";
         private const float EventDuration = 600f; // 10 minutes
         private const float PointInterval = 5f; // Points awarded every 5 seconds
         private const int PointsPerInterval = 10;
