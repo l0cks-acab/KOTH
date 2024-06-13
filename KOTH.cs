@@ -1,24 +1,23 @@
 using System.Collections.Generic;
 using System.Linq;
 using Oxide.Core;
-using Oxide.Core.Configuration;
 using Oxide.Core.Plugins;
-using Oxide.Game.Rust.Cui;
 using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("KOTH", "locks", "1.0.5")]
-    [Description("KOTH event plugin for Rust with GUI scoreboard, admin commands, a locked crate for the winner, and points for kills")]
+    [Info("KOTH", "locks", "1.2.0")]
+    [Description("KOTH event plugin for Rust with admin commands, a hackable locked crate for the winner, points for kills, and teleport command")]
     public class KOTH : RustPlugin
     {
-        private const string EventZoneName = "KOTH Zone";
-        private const float EventDuration = 600f; // 10 minutes
+        private const string EventZoneName = "KOTHZone";
+        private const float DefaultEventDuration = 600f; // 10 minutes
         private const float PointInterval = 5f; // Points awarded every 5 seconds
         private const int PointsPerInterval = 10;
         private const int KillPoints = 1; // Points per kill
-        private const string ScoreboardPanel = "ScoreboardPanel";
-        private const string LockedCratePrefab = "assets/prefabs/deployable/large wood storage/box.wooden.large.prefab";
+        private const string HackableLockedCratePrefab = "assets/prefabs/misc/hackable crate/codelockedhackablecrate.prefab";
+        private const float TeleportOffset = 10f; // Distance from the center to teleport players
+        private const float DefaultEventInterval = 3600f; // 1 hour
 
         private Vector3 ZoneCenter = new Vector3(0, 0, 0); // Set to desired location
         private float ZoneRadius = 20f; // Set to desired radius
@@ -26,53 +25,74 @@ namespace Oxide.Plugins
         private Dictionary<ulong, int> playerPoints = new Dictionary<ulong, int>();
         private Timer eventTimer;
         private Timer pointTimer;
-        private Timer scoreboardTimer;
-        private BaseEntity lockedCrate;
+        private Timer eventIntervalTimer;
+        private BaseEntity hackableLockedCrate;
         private List<ItemDefinition> crateItems;
-
-        private DynamicConfigFile config;
+        private float eventDuration;
+        private float eventInterval;
 
         void Init()
         {
-            config = Config.ReadObject<DynamicConfigFile>() ?? new DynamicConfigFile();
             LoadDefaultConfig();
+            LoadCrateItems();
+            ScheduleNextEvent();
         }
 
         void Unload()
         {
             StopEvent();
+            eventIntervalTimer?.Destroy();
         }
 
         protected override void LoadDefaultConfig()
         {
-            Config.Clear();
             Config["CrateItems"] = new List<object>
             {
                 "rifle.ak",
                 "ammo.rifle"
             };
-            Config.Save();
-            LoadCrateItems();
+            Config["EventDuration"] = DefaultEventDuration;
+            Config["EventInterval"] = DefaultEventInterval;
+            SaveConfig();
         }
 
         private void LoadCrateItems()
         {
             crateItems = new List<ItemDefinition>();
             var itemNames = Config["CrateItems"] as List<object>;
-            foreach (var itemName in itemNames)
+            if (itemNames != null)
             {
-                var itemDef = ItemManager.FindItemDefinition(itemName.ToString());
-                if (itemDef != null)
+                foreach (var itemName in itemNames)
                 {
-                    crateItems.Add(itemDef);
+                    var itemDef = ItemManager.FindItemDefinition(itemName.ToString());
+                    if (itemDef != null)
+                    {
+                        crateItems.Add(itemDef);
+                    }
                 }
+            }
+
+            float.TryParse(Config["EventDuration"]?.ToString(), out eventDuration);
+            float.TryParse(Config["EventInterval"]?.ToString(), out eventInterval);
+
+            if (eventDuration <= 0)
+            {
+                eventDuration = DefaultEventDuration;
+            }
+
+            if (eventInterval <= 0)
+            {
+                eventInterval = DefaultEventInterval;
             }
         }
 
         private void CreateEventZone()
         {
-            // Logic to create the event zone
-            // You can use ZoneManager or similar plugin if available
+            // Create a visible barrier around the event zone
+            foreach (var player in BasePlayer.activePlayerList)
+            {
+                player.SendConsoleCommand("ddraw.sphere", 10f, Color.red, ZoneCenter, ZoneRadius);
+            }
         }
 
         private void StartEvent()
@@ -83,11 +103,11 @@ namespace Oxide.Plugins
                 return;
             }
 
-            eventTimer = timer.Once(EventDuration, EndEvent);
+            eventTimer = timer.Once(eventDuration, EndEvent);
             pointTimer = timer.Every(PointInterval, AwardPoints);
-            scoreboardTimer = timer.Every(1f, UpdateScoreboard);
             PrintToChat("KOTH event has started! Capture and hold the area to win!");
-            SpawnLockedCrate();
+            SpawnHackableLockedCrate();
+            CreateEventZone();
         }
 
         private void EndEvent()
@@ -102,22 +122,20 @@ namespace Oxide.Plugins
             else
             {
                 PrintToChat("The KOTH event has ended! No participants.");
-                DestroyLockedCrate();
+                DestroyHackableLockedCrate();
             }
 
             playerPoints.Clear();
+            ScheduleNextEvent();
         }
 
         private void StopEvent()
         {
             eventTimer?.Destroy();
             pointTimer?.Destroy();
-            scoreboardTimer?.Destroy();
-            DestroyAllScoreboards();
-            DestroyLockedCrate();
+            DestroyHackableLockedCrate();
             eventTimer = null;
             pointTimer = null;
-            scoreboardTimer = null;
         }
 
         private void AwardPoints()
@@ -159,96 +177,46 @@ namespace Oxide.Plugins
             return Vector3.Distance(player.transform.position, ZoneCenter) <= ZoneRadius;
         }
 
-        private void UpdateScoreboard()
+        private void SpawnHackableLockedCrate()
         {
-            foreach (var player in BasePlayer.activePlayerList)
+            hackableLockedCrate = GameManager.server.CreateEntity(HackableLockedCratePrefab, ZoneCenter);
+            if (hackableLockedCrate != null)
             {
-                DestroyScoreboard(player);
-                CreateScoreboard(player);
-            }
-        }
-
-        private void CreateScoreboard(BasePlayer player)
-        {
-            var elements = new CuiElementContainer();
-            var panel = elements.Add(new CuiPanel
-            {
-                Image = { Color = "0.1 0.1 0.1 0.7" },
-                RectTransform = { AnchorMin = "0.8 0.8", AnchorMax = "0.99 0.99" },
-                CursorEnabled = false
-            }, "Overlay", ScoreboardPanel);
-
-            var sortedPoints = playerPoints.OrderByDescending(kv => kv.Value).Take(5).ToList();
-            var yPos = 0.8f;
-            foreach (var kv in sortedPoints)
-            {
-                var playerName = BasePlayer.FindByID(kv.Key)?.displayName ?? "Unknown";
-                var text = $"{playerName}: {kv.Value} points";
-                elements.Add(new CuiLabel
-                {
-                    Text = { Text = text, FontSize = 14, Align = TextAnchor.MiddleLeft },
-                    RectTransform = { AnchorMin = $"0.1 {yPos}", AnchorMax = $"0.9 {yPos + 0.05f}" }
-                }, panel);
-                yPos -= 0.05f;
-            }
-
-            CuiHelper.AddUi(player, elements);
-        }
-
-        private void DestroyScoreboard(BasePlayer player)
-        {
-            CuiHelper.DestroyUi(player, ScoreboardPanel);
-        }
-
-        private void DestroyAllScoreboards()
-        {
-            foreach (var player in BasePlayer.activePlayerList)
-            {
-                DestroyScoreboard(player);
-            }
-        }
-
-        private void SpawnLockedCrate()
-        {
-            lockedCrate = GameManager.server.CreateEntity(LockedCratePrefab, ZoneCenter);
-            if (lockedCrate != null)
-            {
-                lockedCrate.Spawn();
-                var storageContainer = lockedCrate.GetComponent<StorageContainer>();
+                hackableLockedCrate.Spawn();
+                var storageContainer = hackableLockedCrate.GetComponent<StorageContainer>();
                 if (storageContainer != null)
                 {
                     storageContainer.inventory.Clear();
                     foreach (var itemDef in crateItems)
                     {
-                        var item = ItemManager.Create(itemDef, 1);
-                        storageContainer.inventory.AddItem(item);
+                        storageContainer.inventory.AddItem(itemDef, 1);
                     }
-                    lockedCrate.SetFlag(BaseEntity.Flags.Locked, true);
+                    hackableLockedCrate.SetFlag(BaseEntity.Flags.Locked, true);
                 }
             }
         }
 
-        private void DestroyLockedCrate()
+        private void DestroyHackableLockedCrate()
         {
-            if (lockedCrate != null && !lockedCrate.IsDestroyed)
+            if (hackableLockedCrate != null && !hackableLockedCrate.IsDestroyed)
             {
-                lockedCrate.Kill();
-                lockedCrate = null;
+                hackableLockedCrate.Kill();
+                hackableLockedCrate = null;
             }
         }
 
         private void UnlockCrateForWinner(BasePlayer winner)
         {
-            if (lockedCrate != null && !lockedCrate.IsDestroyed)
+            if (hackableLockedCrate != null && !hackableLockedCrate.IsDestroyed)
             {
-                lockedCrate.SetFlag(BaseEntity.Flags.Locked, false);
-                winner.ChatMessage("You can now loot the crate at the center of the KOTH event!");
+                hackableLockedCrate.SetFlag(BaseEntity.Flags.Locked, false);
+                winner.ChatMessage("You can now loot the hackable crate at the center of the KOTH event!");
             }
         }
 
         void OnLootEntity(BasePlayer player, BaseEntity entity)
         {
-            if (entity == lockedCrate && lockedCrate.IsLocked())
+            if (entity == hackableLockedCrate && hackableLockedCrate.IsLocked())
             {
                 var winner = GetEventWinner();
                 if (winner != null && player.userID == winner.userID)
@@ -258,6 +226,15 @@ namespace Oxide.Plugins
                 }
                 player.ChatMessage("You cannot loot this inventory!");
                 NextTick(player.EndLooting);
+            }
+        }
+
+        void OnEntityTakeDamage(BaseCombatEntity entity, HitInfo info)
+        {
+            if (entity == hackableLockedCrate)
+            {
+                info.damageTypes = new DamageTypeList();
+                info.HitEntity = null;
             }
         }
 
@@ -277,6 +254,28 @@ namespace Oxide.Plugins
                 playerPoints[attacker.userID] += KillPoints;
                 attacker.ChatMessage($"You have been awarded {KillPoints} point(s) for killing {victim.displayName}. Total points: {playerPoints[attacker.userID]}");
             }
+        }
+
+        private Vector3 GetRandomPositionNearZone()
+        {
+            float randomAngle = UnityEngine.Random.Range(0f, Mathf.PI * 2);
+            float offsetX = Mathf.Cos(randomAngle) * (ZoneRadius - TeleportOffset);
+            float offsetZ = Mathf.Sin(randomAngle) * (ZoneRadius - TeleportOffset);
+            return new Vector3(ZoneCenter.x + offsetX, ZoneCenter.y, ZoneCenter.z + offsetZ);
+        }
+
+        [ChatCommand("joinkoth")]
+        private void JoinKothCommand(BasePlayer player, string command, string[] args)
+        {
+            if (eventTimer == null)
+            {
+                player.ChatMessage("No KOTH event is currently running.");
+                return;
+            }
+
+            Vector3 teleportPosition = GetRandomPositionNearZone();
+            player.Teleport(teleportPosition);
+            player.ChatMessage("You have been teleported near the KOTH event!");
         }
 
         [ChatCommand("kothcreate")]
@@ -301,6 +300,28 @@ namespace Oxide.Plugins
             StartEvent();
         }
 
+        [ChatCommand("kothcreatehere")]
+        private void CreateEventHereCommand(BasePlayer player, string command, string[] args)
+        {
+            if (!player.IsAdmin)
+            {
+                player.ChatMessage("You do not have permission to use this command.");
+                return;
+            }
+
+            if (args.Length != 1 || !float.TryParse(args[0], out float radius))
+            {
+                player.ChatMessage("Usage: /kothcreatehere <radius>");
+                return;
+            }
+
+            ZoneCenter = player.transform.position;
+            ZoneRadius = radius;
+
+            CreateEventZone();
+            StartEvent();
+        }
+
         [ChatCommand("kothstop")]
         private void StopEventCommand(BasePlayer player, string command, string[] args)
         {
@@ -312,6 +333,12 @@ namespace Oxide.Plugins
 
             StopEvent();
             PrintToChat("KOTH event has been stopped by an admin.");
+        }
+
+        private void ScheduleNextEvent()
+        {
+            eventIntervalTimer = timer.Once(eventInterval, StartEvent);
+            PrintToChat($"Next KOTH event will start in {eventInterval / 60} minutes.");
         }
     }
 }
