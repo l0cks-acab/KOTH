@@ -1,16 +1,17 @@
 # KOTH (King of the Hill) Plugin
 
-The KOTH (King of the Hill) plugin for Rust allows server administrators to create and manage King of the Hill events. Participants compete to capture and hold a designated area to earn points. The player with the most points at the end of the event wins and gains access to a locked crate containing configurable items. Participants can also earn points by killing other players within the event zone.
+The KOTH (King of the Hill) plugin for Rust allows server administrators to create and manage King of the Hill events. Participants compete to capture and hold a designated area to earn points. The player with the most points at the end of the event wins and gains access to a hackable locked crate containing configurable items. Participants can also earn points by killing other players within the event zone.
 
 ## Features
 
 - Create KOTH events at specified locations or at the admin's current location.
 - Automatically start KOTH events at a configurable interval.
 - Award points to participants for staying in the event zone and for killing other players.
-- Display a GUI scoreboard showing the top participants.
 - Teleport players near the KOTH event with a command.
-- Reward the winner with access to a locked crate containing configurable items.
+- Reward the winner with access to a hackable locked crate containing configurable items.
 - Prevent non-winners and non-participants from looting the crate.
+- Ensure the hackable locked crate cannot be damaged.
+- Display a visible barrier around the event zone.
 
 ## Commands
 
@@ -25,7 +26,7 @@ The KOTH (King of the Hill) plugin for Rust allows server administrators to crea
 
 ## Configuration
 
-The plugin configuration allows customization of the items in the locked crate and the event scheduling. The default configuration includes:
+The plugin configuration allows customization of the items in the hackable locked crate and the event scheduling. The default configuration includes:
 
 ```json
 {
