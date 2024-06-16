@@ -7,7 +7,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("KOTH", "locks", "1.5.0")]
+    [Info("KOTH", "locks", "1.7.0")]
     [Description("KOTH event plugin for Rust with admin commands, a large wooden box with Boombox skin for the winner, points for kills, and teleport command")]
     public class KOTH : RustPlugin
     {
@@ -58,6 +58,8 @@ namespace Oxide.Plugins
             };
             Config["EventDuration"] = DefaultEventDuration;
             Config["EventInterval"] = DefaultEventInterval;
+            Config["EnterMessage"] = "You have entered the KOTH zone!";
+            Config["LeaveMessage"] = "You have left the KOTH zone!";
             SaveConfig();
         }
 
@@ -93,7 +95,7 @@ namespace Oxide.Plugins
 
         private void CreateEventZone()
         {
-            if (kothZoneID != null)
+            if (!string.IsNullOrEmpty(kothZoneID))
             {
                 ZoneManager?.Call("EraseZone", kothZoneID);
             }
@@ -103,11 +105,20 @@ namespace Oxide.Plugins
                 ["Name"] = "KOTHZone",
                 ["Radius"] = ZoneRadius,
                 ["Location"] = ZoneCenter,
-                ["EnterMessage"] = "You have entered the KOTH zone!",
-                ["LeaveMessage"] = "You have left the KOTH zone!"
+                ["EnterMessage"] = Config["EnterMessage"].ToString(),
+                ["LeaveMessage"] = Config["LeaveMessage"].ToString()
             };
 
             kothZoneID = (string)ZoneManager?.Call("CreateOrUpdateZone", EventZoneName, zoneDefinition);
+            DrawZone();
+        }
+
+        private void DrawZone()
+        {
+            foreach (var player in BasePlayer.activePlayerList)
+            {
+                player.SendConsoleCommand("ddraw.sphere", 10f, Color.red, ZoneCenter, ZoneRadius);
+            }
         }
 
         private void StartEvent()
@@ -120,7 +131,8 @@ namespace Oxide.Plugins
 
             eventTimer = timer.Once(eventDuration, EndEvent);
             pointTimer = timer.Every(PointInterval, AwardPoints);
-            PrintToChat("KOTH event has started! Capture and hold the area to win!");
+            var gridLocation = GetGridLocation(ZoneCenter);
+            PrintToChat($"KOTH event has started at {gridLocation}! Capture and hold the area to win!");
             SpawnLargeWoodenBox();
             CreateEventZone();
         }
@@ -149,7 +161,10 @@ namespace Oxide.Plugins
             eventTimer?.Destroy();
             pointTimer?.Destroy();
             DestroyLargeWoodenBox();
-            ZoneManager?.Call("EraseZone", kothZoneID);
+            if (!string.IsNullOrEmpty(kothZoneID))
+            {
+                ZoneManager?.Call("EraseZone", kothZoneID);
+            }
             eventTimer = null;
             pointTimer = null;
         }
@@ -285,6 +300,12 @@ namespace Oxide.Plugins
             return new Vector3(ZoneCenter.x + offsetX, ZoneCenter.y, ZoneCenter.z + offsetZ);
         }
 
+        private string GetGridLocation(Vector3 position)
+        {
+            var grid = PhoneController.PositionToGridCoord(position);
+            return grid;
+        }
+
         [ChatCommand("joinkoth")]
         private void JoinKothCommand(BasePlayer player, string command, string[] args)
         {
@@ -372,7 +393,7 @@ namespace Oxide.Plugins
         {
             if (ZoneID == kothZoneID)
             {
-                player.ChatMessage("You have entered the KOTH zone!");
+                player.ChatMessage(Config["EnterMessage"].ToString());
             }
         }
 
@@ -380,7 +401,7 @@ namespace Oxide.Plugins
         {
             if (ZoneID == kothZoneID)
             {
-                player.ChatMessage("You have left the KOTH zone!");
+                player.ChatMessage(Config["LeaveMessage"].ToString());
             }
         }
 
@@ -388,7 +409,7 @@ namespace Oxide.Plugins
         {
             if (ZoneID == kothZoneID && entity is BasePlayer player)
             {
-                player.ChatMessage("You have entered the KOTH zone!");
+                player.ChatMessage(Config["EnterMessage"].ToString());
             }
         }
 
@@ -396,7 +417,7 @@ namespace Oxide.Plugins
         {
             if (ZoneID == kothZoneID && entity is BasePlayer player)
             {
-                player.ChatMessage("You have left the KOTH zone!");
+                player.ChatMessage(Config["LeaveMessage"].ToString());
             }
         }
     }
