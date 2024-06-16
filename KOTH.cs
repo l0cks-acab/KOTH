@@ -6,19 +6,24 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("KOTH", "locks", "1.2.0")]
-    [Description("KOTH event plugin for Rust with admin commands, a hackable locked crate for the winner, points for kills, and teleport command")]
+    [Info("KOTH", "locks", "1.5.0")]
+    [Description("KOTH event plugin for Rust with admin commands, a large wooden box with Boombox skin for the winner, points for kills, and teleport command")]
     public class KOTH : RustPlugin
     {
+        [PluginReference]
+        private Plugin ZoneManager;
+
         private const string EventZoneName = "KOTHZone";
         private const float DefaultEventDuration = 600f; // 10 minutes
         private const float PointInterval = 5f; // Points awarded every 5 seconds
         private const int PointsPerInterval = 10;
         private const int KillPoints = 1; // Points per kill
-        private const string HackableLockedCratePrefab = "assets/prefabs/misc/hackable crate/codelockedhackablecrate.prefab";
+        private const string LargeWoodenBoxPrefab = "assets/prefabs/deployable/large wood storage/box.wooden.large.prefab";
+        private const ulong BoomboxSkinID = 252490; // Skin ID for Boombox
         private const float TeleportOffset = 10f; // Distance from the center to teleport players
         private const float DefaultEventInterval = 3600f; // 1 hour
 
+        private string kothZoneID;
         private Vector3 ZoneCenter = new Vector3(0, 0, 0); // Set to desired location
         private float ZoneRadius = 20f; // Set to desired radius
 
@@ -26,8 +31,8 @@ namespace Oxide.Plugins
         private Timer eventTimer;
         private Timer pointTimer;
         private Timer eventIntervalTimer;
-        private BaseEntity hackableLockedCrate;
-        private List<ItemDefinition> crateItems;
+        private BaseEntity largeWoodenBox;
+        private Dictionary<string, int> crateItems;
         private float eventDuration;
         private float eventInterval;
 
@@ -46,10 +51,9 @@ namespace Oxide.Plugins
 
         protected override void LoadDefaultConfig()
         {
-            Config["CrateItems"] = new List<object>
+            Config["CrateItems"] = new Dictionary<string, object>
             {
-                "rifle.ak",
-                "ammo.rifle"
+                {"ammo.rocket.basic", 30}
             };
             Config["EventDuration"] = DefaultEventDuration;
             Config["EventInterval"] = DefaultEventInterval;
@@ -58,16 +62,16 @@ namespace Oxide.Plugins
 
         private void LoadCrateItems()
         {
-            crateItems = new List<ItemDefinition>();
-            var itemNames = Config["CrateItems"] as List<object>;
-            if (itemNames != null)
+            crateItems = new Dictionary<string, int>();
+            var items = Config["CrateItems"] as Dictionary<string, object>;
+            if (items != null)
             {
-                foreach (var itemName in itemNames)
+                foreach (var item in items)
                 {
-                    var itemDef = ItemManager.FindItemDefinition(itemName.ToString());
+                    var itemDef = ItemManager.FindItemDefinition(item.Key);
                     if (itemDef != null)
                     {
-                        crateItems.Add(itemDef);
+                        crateItems.Add(item.Key, Convert.ToInt32(item.Value));
                     }
                 }
             }
@@ -88,11 +92,21 @@ namespace Oxide.Plugins
 
         private void CreateEventZone()
         {
-            // Create a visible barrier around the event zone
-            foreach (var player in BasePlayer.activePlayerList)
+            if (kothZoneID != null)
             {
-                player.SendConsoleCommand("ddraw.sphere", 10f, Color.red, ZoneCenter, ZoneRadius);
+                ZoneManager?.Call("EraseZone", kothZoneID);
             }
+
+            var zoneDefinition = new Dictionary<string, object>
+            {
+                ["Name"] = "KOTHZone",
+                ["Radius"] = ZoneRadius,
+                ["Location"] = ZoneCenter,
+                ["EnterMessage"] = "You have entered the KOTH zone!",
+                ["LeaveMessage"] = "You have left the KOTH zone!"
+            };
+
+            kothZoneID = (string)ZoneManager?.Call("CreateOrUpdateZone", EventZoneName, zoneDefinition);
         }
 
         private void StartEvent()
@@ -106,7 +120,7 @@ namespace Oxide.Plugins
             eventTimer = timer.Once(eventDuration, EndEvent);
             pointTimer = timer.Every(PointInterval, AwardPoints);
             PrintToChat("KOTH event has started! Capture and hold the area to win!");
-            SpawnHackableLockedCrate();
+            SpawnLargeWoodenBox();
             CreateEventZone();
         }
 
@@ -122,7 +136,7 @@ namespace Oxide.Plugins
             else
             {
                 PrintToChat("The KOTH event has ended! No participants.");
-                DestroyHackableLockedCrate();
+                DestroyLargeWoodenBox();
             }
 
             playerPoints.Clear();
@@ -133,7 +147,8 @@ namespace Oxide.Plugins
         {
             eventTimer?.Destroy();
             pointTimer?.Destroy();
-            DestroyHackableLockedCrate();
+            DestroyLargeWoodenBox();
+            ZoneManager?.Call("EraseZone", kothZoneID);
             eventTimer = null;
             pointTimer = null;
         }
@@ -174,49 +189,54 @@ namespace Oxide.Plugins
 
         private bool IsPlayerInZone(BasePlayer player)
         {
-            return Vector3.Distance(player.transform.position, ZoneCenter) <= ZoneRadius;
+            return ZoneManager?.Call("isPlayerInZone", EventZoneName, player) is bool inZone && inZone;
         }
 
-        private void SpawnHackableLockedCrate()
+        private void SpawnLargeWoodenBox()
         {
-            hackableLockedCrate = GameManager.server.CreateEntity(HackableLockedCratePrefab, ZoneCenter);
-            if (hackableLockedCrate != null)
+            largeWoodenBox = GameManager.server.CreateEntity(LargeWoodenBoxPrefab, ZoneCenter);
+            if (largeWoodenBox != null)
             {
-                hackableLockedCrate.Spawn();
-                var storageContainer = hackableLockedCrate.GetComponent<StorageContainer>();
+                largeWoodenBox.skinID = BoomboxSkinID;
+                largeWoodenBox.Spawn();
+                var storageContainer = largeWoodenBox.GetComponent<StorageContainer>();
                 if (storageContainer != null)
                 {
                     storageContainer.inventory.Clear();
-                    foreach (var itemDef in crateItems)
+                    foreach (var item in crateItems)
                     {
-                        storageContainer.inventory.AddItem(itemDef, 1);
+                        var itemDef = ItemManager.FindItemDefinition(item.Key);
+                        if (itemDef != null)
+                        {
+                            storageContainer.inventory.AddItem(itemDef, item.Value);
+                        }
                     }
-                    hackableLockedCrate.SetFlag(BaseEntity.Flags.Locked, true);
+                    largeWoodenBox.SetFlag(BaseEntity.Flags.Locked, true);
                 }
             }
         }
 
-        private void DestroyHackableLockedCrate()
+        private void DestroyLargeWoodenBox()
         {
-            if (hackableLockedCrate != null && !hackableLockedCrate.IsDestroyed)
+            if (largeWoodenBox != null && !largeWoodenBox.IsDestroyed)
             {
-                hackableLockedCrate.Kill();
-                hackableLockedCrate = null;
+                largeWoodenBox.Kill();
+                largeWoodenBox = null;
             }
         }
 
         private void UnlockCrateForWinner(BasePlayer winner)
         {
-            if (hackableLockedCrate != null && !hackableLockedCrate.IsDestroyed)
+            if (largeWoodenBox != null && !largeWoodenBox.IsDestroyed)
             {
-                hackableLockedCrate.SetFlag(BaseEntity.Flags.Locked, false);
-                winner.ChatMessage("You can now loot the hackable crate at the center of the KOTH event!");
+                largeWoodenBox.SetFlag(BaseEntity.Flags.Locked, false);
+                winner.ChatMessage("You can now loot the large wooden box at the center of the KOTH event!");
             }
         }
 
         void OnLootEntity(BasePlayer player, BaseEntity entity)
         {
-            if (entity == hackableLockedCrate && hackableLockedCrate.IsLocked())
+            if (entity == largeWoodenBox && largeWoodenBox.IsLocked())
             {
                 var winner = GetEventWinner();
                 if (winner != null && player.userID == winner.userID)
@@ -231,9 +251,9 @@ namespace Oxide.Plugins
 
         void OnEntityTakeDamage(BaseCombatEntity entity, HitInfo info)
         {
-            if (entity == hackableLockedCrate)
+            if (entity == largeWoodenBox)
             {
-                info.damageTypes = new DamageTypeList();
+                info.damageTypes.Clear();
                 info.HitEntity = null;
             }
         }
@@ -276,6 +296,12 @@ namespace Oxide.Plugins
             Vector3 teleportPosition = GetRandomPositionNearZone();
             player.Teleport(teleportPosition);
             player.ChatMessage("You have been teleported near the KOTH event!");
+        }
+
+        [ChatCommand("koth")]
+        private void KothCommand(BasePlayer player, string command, string[] args)
+        {
+            player.ChatMessage("/joinkoth - Teleports you near the KOTH event.");
         }
 
         [ChatCommand("kothcreate")]
@@ -339,6 +365,38 @@ namespace Oxide.Plugins
         {
             eventIntervalTimer = timer.Once(eventInterval, StartEvent);
             PrintToChat($"Next KOTH event will start in {eventInterval / 60} minutes.");
+        }
+
+        void OnEnterZone(string ZoneID, BasePlayer player)
+        {
+            if (ZoneID == kothZoneID)
+            {
+                player.ChatMessage("You have entered the KOTH zone!");
+            }
+        }
+
+        void OnExitZone(string ZoneID, BasePlayer player)
+        {
+            if (ZoneID == kothZoneID)
+            {
+                player.ChatMessage("You have left the KOTH zone!");
+            }
+        }
+
+        void OnEntityEnterZone(string ZoneID, BaseEntity entity)
+        {
+            if (ZoneID == kothZoneID && entity is BasePlayer player)
+            {
+                player.ChatMessage("You have entered the KOTH zone!");
+            }
+        }
+
+        void OnEntityExitZone(string ZoneID, BaseEntity entity)
+        {
+            if (ZoneID == kothZoneID && entity is BasePlayer player)
+            {
+                player.ChatMessage("You have left the KOTH zone!");
+            }
         }
     }
 }
