@@ -1,3 +1,5 @@
+I gave up on this plugin, feel free to take over it.
+
 # KOTH (King of the Hill) Plugin
 
 The KOTH (King of the Hill) plugin for Rust allows server administrators to create and manage King of the Hill events. Participants compete to capture and hold a designated area to earn points. The player with the most points at the end of the event wins and gains access to a large wooden box with Boombox skin containing configurable items. Participants can also earn points by killing other players within the event zone. Requires [ZoneManager](https://umod.org/plugins/zone-manager)
